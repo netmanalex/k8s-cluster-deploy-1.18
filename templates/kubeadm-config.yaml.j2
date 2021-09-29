@@ -1,0 +1,44 @@
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: {{ ansible_eth0.ipv4.address }}
+  bindPort: 6443
+---
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: ClusterConfiguration
+kubernetesVersion: {{ kubernetes_version }}
+controllerManager:
+  extraArgs:
+    cluster-signing-cert-file: /etc/kubernetes/pki/ca.crt
+    cluster-signing-key-file: /etc/kubernetes/pki/ca.key
+apiServer:
+  certSANs:
+  - 127.0.0.1
+  - localhost
+  - {{ kube_master_vip }}
+  - {{ kube_master1_addr }}
+  - {{ kube_master2_addr }}
+  - {{ kube_master3_addr }}
+networking:
+  dnsDomain: {{ kube_domain_name }}
+  podSubnet: {{ kube_pod_subnet }}
+  serviceSubnet: {{ kube_service_subnet }}
+certificatesDir: /etc/kubernetes/pki
+clusterName: kubernetes
+dns:
+  type: CoreDNS
+etcd:
+    external:
+        endpoints:
+        - {{ etcd_scheme }}://{{ kube_master1_addr }}:2379
+        - {{ etcd_scheme }}://{{ kube_master2_addr }}:2379
+        - {{ etcd_scheme }}://{{ kube_master3_addr }}:2379
+        caFile: /etc/kubernetes/pki/etcd/ca.crt
+        certFile: /etc/kubernetes/pki/apiserver-etcd-client.crt
+        keyFile: /etc/kubernetes/pki/apiserver-etcd-client.key
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+featureGates:
+  SupportIPVSProxyMode: true
+mode: ipvs

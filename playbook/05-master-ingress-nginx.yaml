@@ -1,0 +1,22 @@
+---
+- hosts: "{{ group }}"
+  vars:
+    kube_home: /data/usr/kubernetes
+  tasks:
+    # 上传ingress-nginx.yaml 文件
+    - copy: src="../files/ingress-nginx.yaml" dest="{{ kube_home }}/ingress-nginx.yaml"
+      when: 'ansible_eth0.ipv4.address == kube_master1_addr'
+   
+    # 给ingress-nginx节点打标签
+    - name: Add labels on ingress-nginx server
+      shell: kubectl label nodes {{ item }} custem/ingress-controller-ready=true
+      with_items: "{{ ingress_nginx_server }}"
+      when: 'ansible_eth0.ipv4.address == kube_master1_addr'
+      
+    # 安装ingress-nginx
+    - name: Install ingress-nginx
+      shell: kubectl apply -f {{ kube_home }}/ingress-nginx.yaml
+      when: 'ansible_eth0.ipv4.address == kube_master1_addr'
+    
+  become: yes # 等同于添加了sudo 
+  gather_facts: yes # 想使用ansible的内置变量，必须启用这个选项。

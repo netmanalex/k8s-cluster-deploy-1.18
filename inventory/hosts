@@ -1,0 +1,6 @@
+# 配置文件在group_vars目录的cluster文件中，本文件只是添加主机列表使用。
+[cluster]
+10.32.34.134     hostname={{kube_master1_name}}
+10.32.34.135     hostname={{kube_master2_name}}
+10.32.34.136     hostname={{kube_master3_name}}
+10.32.34.137     hostname=k8s-node01

@@ -1,0 +1,39 @@
+---
+- hosts: "{{ group }}"
+  vars:
+    kube_home: /data/usr/kubernetes
+    kube_etc: /etc/kubernetes
+  tasks:
+    # 给ingress-nginx节点打标签
+    - name: Write join.sh
+      shell: kubeadm token create --print-join-command >{{ kube_home }}/join.sh
+      ignore_errors: True # 命令执行失败，ansible 中断。
+      when: "ansible_eth0.ipv4.address == kube_master1_addr"
+    
+    # 将join命令拷贝到本地
+    - name: Copy join.sh to local
+      fetch: 
+        src: "{{ kube_home }}/join.sh"
+        dest: "../tmp/"
+      when: "ansible_eth0.ipv4.address == kube_master1_addr"
+    
+    # 上传脚本到node节点
+    - copy: src="../tmp/{{ kube_master1_addr }}/{{ kube_home }}/join.sh" 
+              dest="{{ kube_home }}/join.sh" mode=0755
+      when: ansible_eth0.ipv4.address not in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    
+    # 执行脚本
+    - name: run join.sh
+      shell: sh {{ kube_home }}/join.sh
+      ignore_errors: True # 命令执行失败，ansible 中断。
+      when: ansible_eth0.ipv4.address not in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    
+    # 更改kubelet.conf
+    - name: modify kubelet.conf server
+      shell: "cat {{ kube_etc }}/kubelet.conf > {{ kube_etc }}/kubelet.conf.bak && 
+             sed -i 's#server.*$#server: https://10.32.34.138:6443#g' {{ kube_etc }}/kubelet.conf &&
+             systemctl restart kubelet"
+      when: ansible_eth0.ipv4.address not in [kube_master1_addr,kube_master2_addr,kube_master3_addr] and  kube_master_vip is defined
+  become: yes # 等同于添加了sudo 
+  gather_facts: yes # 想使用ansible的内置变量，必须启用这个选项。
+

@@ -1,0 +1,23 @@
+ansible_ssh_user: root
+docker_version: docker-ce-19.03.5
+# kubernetes 相关变量
+kubernetes_version: v1.18.8 
+kube_service_subnet: 172.255.0.0/16 
+kube_pod_subnet: 172.172.0.0/16
+kube_domain_name: cluster.local
+# 负载均衡或者slb地址
+kube_master_vip: 10.32.34.138
+# master节点信息
+kube_master1_name: k8s-master1
+kube_master1_addr: 10.32.34.134
+kube_master2_name: k8s-master2
+kube_master2_addr: 10.32.34.135
+kube_master3_name: k8s-master3
+kube_master3_addr: 10.32.34.136
+# etcd 相关变量；默认ETCD部署在master节点上。
+etcd_scheme: https
+etcd_basedir: /data/usr/etcd
+kube_etcd_image: k8s.gcr.io/etcd:3.4.3
+
+# 注意，必须是主机名，也就是hosts文件ip列表中的hostname字段
+ingress_nginx_server: ['k8s-node01']

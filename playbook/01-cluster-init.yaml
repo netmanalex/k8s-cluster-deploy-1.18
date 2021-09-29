@@ -1,0 +1,180 @@
+---
+# 集群内所有节点都可使用
+- hosts: "{{ group }}"
+  vars:
+  # vars_files:
+    # - ../inventory/group_vars/kubernetes
+    kube_home: /data/usr/kubernetes
+    kube_cfgdir: /etc/kubernetes
+  tasks:
+    - file: path="{{ kube_home }}" state=directory
+    # 关停selinux
+    - lineinfile: dest="/etc/selinux/config" regexp='^SELINUX=' line='SELINUX=disabled'
+    - command: setenforce 0
+      ignore_errors: yes
+
+    # 关停防火墙
+    - name: Disable firewalld service
+      service: name=firewalld enabled=no
+    - name: Stop firewalld service
+      service: name=firewalld state=stopped
+    
+    # 安装必要的包
+    - name: Modify the yum.conf
+      lineinfile: dest=/etc/yum.conf state=present
+            line="exclude=kernel* centos-release* redhat-release*"
+    - yum: name=wget,net-tools,device-mapper-persistent-data,lvm2,ack,htop,sysstat,mlocate,chrony,bash-completion,vim,git,telnet,bind-utils,lsof,yum-utils,epel-release,python-pip state=latest
+    - yum: name=* state=latest exclude=docker-*,initscripts
+    
+    # 设置系统内核参数
+    - name: Setting present kernel params
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        ignoreerrors: yes
+        state: present
+      with_items:
+        - { name: 'net.ipv4.ip_forward', value: 1 }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: 1 }
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: 1 }
+
+    # 启用IPVS
+    - name: Modprode Kernel Module for IPVS
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - ip_vs
+        - ip_vs_rr
+        - ip_vs_wrr
+        - ip_vs_sh
+        - nf_conntrack_ipv4
+        - br_netfilter
+
+    # 修改 limits.conf
+    - name: Modify /etc/security/limits.conf
+      lineinfile:
+        dest: "/etc/security/limits.conf"
+        state: present
+        line: "{{ item }}"
+      with_items:
+        - "* soft nofile 65536"
+        - "* hard nofile 65536"
+        - "* soft nproc 65536"
+        - "* hard nproc 65536"
+        - "* soft  memlock  unlimited"
+        - "* hard memlock  unlimited"
+
+    # 重置主机名
+    - name: Rename hostname
+      command: hostnamectl set-hostname {{ hostname|quote  }} 
+    - command: hostname {{hostname|quote}}
+    
+    # 关停ntp服务
+    - name: Disable ntpd service
+      service: name=ntpd enabled=no
+      ignore_errors: yes # 忽略错误
+    - name: stop ntpd service
+      service: name=ntpd state=stopped
+      ignore_errors: yes
+
+    # chronyd
+    - name: Enable chronyd service
+      service: name=chronyd enabled=yes
+    - name: Start chronyd service
+      service: name=chronyd state=started
+
+    # 配置网卡
+    - name: Modify ifcfg-eth0 peerdns
+      lineinfile: dest=/etc/sysconfig/network-scripts/ifcfg-eth0 state=present line="PEERDNS=no"
+    
+    # 创建数据目录
+    - name: Create /data/* dir
+      file: path={{ item.dir }} state=directory mode={{ item.mode }}
+      with_items:
+        - {dir: "/data", mode: 755}
+        - {dir: "/data/usr", mode: "755"}
+        - {dir: "/data/var", mode: "755"}
+        - {dir: "/data/var/lib", mode: "755"}
+        - {dir: "/data/var/run", mode: "777"}
+        - {dir: "/data/log", mode: "777"}
+    
+    # 安装docker-compose
+    ## steps 1
+    - command: yum install -y yum-utils
+    - command: yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    # - command: yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo # 国内阿里云
+    - yum: name={{ docker_version }} state=present
+    ## steps 2
+    - file: path={{ item.dir }} state={{ item.state }}
+      with_items:
+        - {dir: "/etc/docker", state: "directory"}
+        - {dir: "/data/var/lib/docker", state: "directory"}
+        - {dir: "/var/lib/docker", state: "absent"}
+    - file: path="/var/lib/docker" src="/data/var/lib/docker" state=link
+    - copy: src="../files/daemon.json" dest="/etc/docker/daemon.json"
+    ## steps 3
+    - command: systemctl daemon-reload 
+    - service: name=docker enabled=yes
+    - service: name=docker state=restarted
+    # steps 4 install docker-compose
+    - shell: "curl -L https://github.com/docker/compose/releases/download/1.23.2/docker-compose-{{ ansible_system }}-{{ ansible_machine }} -o /usr/bin/docker-compose"
+    - command: chmod +x /usr/bin/docker-compose
+    
+    # 安装kubernetes yum 源
+    - copy: src="../files/kubernetes.repo" 
+              dest="/etc/yum.repos.d" mode=0644
+    
+    # 添加本主机hosts
+    - name: Add hosts
+      lineinfile:
+        dest: "/etc/hosts"
+        state: present
+        line: "{{ item.ip }}  {{ item.name }}"
+      with_items:
+        - {ip: "{{ ansible_eth0.ipv4.address }}", name: "{{ hostname|quote }}"}
+
+    # 安装kubernetes二进制程序
+    - name: Install kubernetes
+      copy: 
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      with_items:
+        - {src: "../files/bin/kubeadm", dest: "/bin/kubeadm", mode: "0755"}
+        - {src: "../files/bin/kubectl", dest: "/bin/kubectl", mode: "0755"}
+        - {src: "../files/bin/kubelet", dest: "/bin/kubelet", mode: "0755"}
+
+    - yum: name=kubernetes-cni state=latest
+    # 创建相关目录
+    - file: path="/usr/lib/systemd/system/kubelet.service.d/" state=directory
+    - file: path="/etc/cni/net.d/" state=directory
+    - file: path="/var/lib/kubelet/pki/" state=directory
+    - file: path="/etc/kubernetes/pki/" state=directory
+    
+    # 拷贝kubelet 配置文件
+    - name: Copy kubelet config
+      template: 
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - {src: "../files/kubelet.service", dest: "/usr/lib/systemd/system/kubelet.service"}
+        - {src: "../files/10-kubeadm.conf", dest: "/usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf"}
+        - {src: "../files/10-flannel.conflist", dest: "/etc/cni/net.d/10-flannel.conflist"}
+    
+    # 拷贝ca和server证书
+    - name: Copy CA certificate
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      with_items:
+        - {src: "../_cfssl/certs/{{ hostname|quote }}.pem", dest: "/var/lib/kubelet/pki/kubelet.crt", mode: "preserve"}
+        - {src: "../_cfssl/certs/{{ hostname|quote }}-key.pem", dest: "/var/lib/kubelet/pki/kubelet.key", mode: "preserve"}
+
+    - command: systemctl daemon-reload
+    - service: name=kubelet enabled=yes
+    - service: name=kubelet state=restarted
+  become: yes
+  # gather_facts: no
+  gather_facts: yes # 想使用ansible的内置变量，必须启用这个选项。

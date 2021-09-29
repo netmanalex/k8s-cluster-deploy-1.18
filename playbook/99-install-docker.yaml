@@ -1,0 +1,27 @@
+---
+# docker及docker-compose服务安装。
+- hosts: "{{ group }}"
+  vars:
+  tasks:
+    # 安装docker-compose
+    ## steps 1
+    - command: yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+    - yum: name={{docker_version}} state=present
+    ## steps 2
+    - file: path={{ item.dir }} state={{ item.state }}
+      with_items:
+        - {dir: "/etc/docker", state: "directory"}
+        - {dir: "/data/var/lib/docker", state: "directory"}
+        - {dir: "/var/lib/docker", state: "absent"}
+    - file: path="/var/lib/docker" src="/data/var/lib/docker" state=link
+    - copy: src="../files/daemon.json" dest="/etc/docker/daemon.json"
+    ## steps 3
+    - command: systemctl daemon-reload 
+    - service: name=docker enabled=yes
+    - service: name=docker state=restarted
+    # steps 4 install docker-compose
+    - shell: "curl -L https://github.com/docker/compose/releases/download/1.23.2/docker-compose-{{ ansible_system }}-{{ ansible_machine }} -o /usr/bin/docker-compose"
+    - command: chmod +x /usr/bin/docker-compose
+
+  become: yes
+  gather_facts: yes # 想使用ansible的内置变量，必须启用这个选项。

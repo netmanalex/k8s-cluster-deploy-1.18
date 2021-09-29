@@ -1,0 +1,30 @@
+version: '3.3'
+services:
+    etcd:
+        container_name: etcd_{{ ansible_nodename }}
+        image: {{ kube_etcd_image }}
+        command: |
+                etcd --name={{ ansible_nodename }}
+                --advertise-client-urls={{ etcd_scheme }}://{{ ansible_eth0.ipv4.address }}:2379
+                --cert-file=/etc/kubernetes/pki/etcd/server.crt
+                --client-cert-auth=true
+                --data-dir=/var/lib/etcd
+                --initial-advertise-peer-urls={{ etcd_scheme }}://{{ ansible_eth0.ipv4.address }}:2380
+                --initial-cluster={{ kube_master1_name }}={{ etcd_scheme }}://{{ kube_master1_addr }}:2380,{{ kube_master2_name }}={{ etcd_scheme }}://{{ kube_master2_addr }}:2380,{{ kube_master3_name }}={{ etcd_scheme }}://{{ kube_master3_addr }}:2380
+                --initial-cluster-state=new
+                --key-file=/etc/kubernetes/pki/etcd/server.key
+                --listen-client-urls={{ etcd_scheme }}://{{ ansible_eth0.ipv4.address }}:2379
+                --listen-metrics-urls=http://127.0.0.1:2381
+                --listen-peer-urls={{ etcd_scheme }}://{{ ansible_eth0.ipv4.address }}:2380
+                --peer-cert-file=/etc/kubernetes/pki/etcd/peer.crt
+                --peer-client-cert-auth=true
+                --peer-key-file=/etc/kubernetes/pki/etcd/peer.key
+                --peer-trusted-ca-file=/etc/kubernetes/pki/etcd/ca.crt
+                --snapshot-count=10000
+                --trusted-ca-file=/etc/kubernetes/pki/etcd/ca.crt
+        restart: always
+        volumes:
+           - /var/lib/etcd:/var/lib/etcd
+           - /etc/kubernetes/pki/etcd:/etc/kubernetes/pki/etcd
+        network_mode: "host"
+        

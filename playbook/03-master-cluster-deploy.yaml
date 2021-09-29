@@ -1,0 +1,103 @@
+---
+- hosts: "{{ group }}"
+  # vars_files:
+  #   - ../inventory/group_vars/kubernetes
+  vars:
+    kube_home: /data/usr/kubernetes
+    kube_cfgdir: /etc/kubernetes
+  tasks:
+
+    # 添加主机hosts
+    - name: Add hosts
+      lineinfile:
+        dest: "/etc/hosts"
+        state: present
+        line: "{{ item.ip }}  {{ item.name }}"
+      with_items:
+        # - {ip: "127.0.0.1", name: "{{ ansible_hostname }}"}
+        - {ip: "{{ kube_master1_addr }}", name: "{{ kube_master1_name }}"}
+        - {ip: "{{ kube_master2_addr }}", name: "{{ kube_master2_name }}"}
+        - {ip: "{{ kube_master3_addr }}", name: "{{ kube_master3_name }}"}
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+     
+    # 拷贝ca和server证书
+    - name: Copy CA certificate
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      with_items:
+        - {src: "../_cfssl/ca/ca.pem", dest: "/etc/kubernetes/pki/ca.crt", mode: "preserve"}
+        - {src: "../_cfssl/ca/ca-key.pem", dest: "/etc/kubernetes/pki/ca.key", mode: "preserve"}
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+    # 创建所需目录
+    - file: path="/root/.kube" state=directory
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    
+    # 上传kubeadm-config.yaml 和flannel配置文件
+    - name: Generate kubeadm-config.yaml and kube-flannel.yaml
+      template: 
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - {src: "../templates/kubeadm-config.yaml.j2", dest: "{{ kube_home }}/kubeadm-config.yaml"}
+        - {src: "../templates/kube-flannel.yml.j2", dest: "{{ kube_home }}/kube-flannel.yml"}
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+    # kubeadm 初始化部署集群
+    - name: Initialize the cluster
+      shell: kubeadm init --config {{ kube_home }}/kubeadm-config.yaml
+      when: 'ansible_eth0.ipv4.address == kube_master1_addr'
+
+    # 将证书拷贝到master1
+    - name: Transfer file from master1 to local
+      fetch: 
+        src: "{{ item.src }}"
+        dest: "../tmp/"
+      with_items:
+        - {src: "{{ kube_cfgdir }}/pki/sa.key"}
+        - {src: "{{ kube_cfgdir }}/pki/sa.pub"}
+        - {src: "{{ kube_cfgdir }}/pki/front-proxy-ca.crt"}
+        - {src: "{{ kube_cfgdir }}/pki/front-proxy-ca.key"}
+      when: 'ansible_eth0.ipv4.address == kube_master1_addr'
+      
+    # 将证书拷贝到master2,master3。
+    - name: Transfer file from local to master[2,3]
+      copy: 
+        src: "../tmp/{{ kube_master1_addr }}{{ item.src }}" 
+        dest: "{{ item.src }}"
+      with_items:
+        - {src: "{{ kube_cfgdir }}/pki/sa.key"}
+        - {src: "{{ kube_cfgdir }}/pki/sa.pub"}
+        - {src: "{{ kube_cfgdir }}/pki/front-proxy-ca.crt"}
+        - {src: "{{ kube_cfgdir }}/pki/front-proxy-ca.key"}
+      when: ansible_eth0.ipv4.address in [kube_master2_addr,kube_master3_addr]
+    
+    # kubeadm 初始化master2,master3。
+    - name: Initialize the other masters
+      shell: kubeadm init --config {{ kube_home }}/kubeadm-config.yaml
+      when: ansible_eth0.ipv4.address in [kube_master2_addr,kube_master3_addr]
+
+    # 安装后命令1
+    - shell: "cat {{ kube_cfgdir }}/admin.conf > /root/.kube/config"
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    # 安装后命令2
+    - shell: "chown $(id -u):$(id -g) /root/.kube/config"
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    
+    # 安装flannel网络
+    - name: Install flannel cni
+      shell: kubectl apply -f {{ kube_home }}/kube-flannel.yml
+      when: 'ansible_eth0.ipv4.address == kube_master1_addr'
+
+    # 添加kubectl名字自动补全
+    - name: Modify ~/.bashrc
+      lineinfile:
+        dest: "~/.bashrc"
+        state: present
+        line: "source <(kubectl completion bash)"
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+  become: yes # 等同于添加了sudo 
+  gather_facts: yes # 想使用ansible的内置变量，必须启用这个选项。

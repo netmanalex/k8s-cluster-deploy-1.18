@@ -1,0 +1,56 @@
+---
+- hosts: "{{ group }}"
+  vars:
+  tasks:
+    # 拉取镜像
+    - command: docker pull {{ kube_etcd_image }}
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    
+    # 创建ETCD相关目录
+    - name: Create data dir
+      file:
+        path: "{{ item }}"
+        state: "directory"
+      with_items:
+        - "{{ etcd_basedir }}"
+        - "/etc/kubernetes/pki/etcd/"
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+    
+    # 上传配置文件
+    - name: Generate kubeadm-etcd-cfg.yaml and docker-compose.yaml
+      template: 
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - {src: "../templates/kubeadm-etcd-cfg.yaml.j2", dest: "{{ etcd_basedir }}/kubeadm-etcd-cfg.yaml"}
+        - {src: "../templates/etcd-docker-compose.yaml.j2", dest: "{{ etcd_basedir }}/docker-compose.yaml"}
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+    # 将CA证书拷贝到 /etc/kubernetes/pki/etcd/,会使用该证书，生成其他证书。
+    - name: Copy the CA certificate used by ETCD
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      with_items:
+        - {src: "../_cfssl/ca/ca.pem", dest: "/etc/kubernetes/pki/etcd/ca.crt", mode: "preserve"}
+        - {src: "../_cfssl/ca/ca-key.pem", dest: "/etc/kubernetes/pki/etcd/ca.key", mode: "preserve"}
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+    # 生成 ETCD使用的证书
+    - name: Generate the certificate used by ETCD
+      shell: "{{ item }}"
+      with_items:
+        - "kubeadm init phase certs etcd-server --config={{ etcd_basedir }}/kubeadm-etcd-cfg.yaml"
+        - "kubeadm init phase certs etcd-peer --config={{ etcd_basedir }}/kubeadm-etcd-cfg.yaml"
+        - "kubeadm init phase certs etcd-healthcheck-client --config={{ etcd_basedir }}/kubeadm-etcd-cfg.yaml"
+        - "kubeadm init phase certs apiserver-etcd-client --config={{ etcd_basedir }}/kubeadm-etcd-cfg.yaml"
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+    # 启动etcd服务
+    - name: Start the ETCD service
+      command: docker-compose -f {{ etcd_basedir }}/docker-compose.yaml up -d
+      when: ansible_eth0.ipv4.address in [kube_master1_addr,kube_master2_addr,kube_master3_addr]
+
+  become: yes
+  gather_facts: yes # 启用缓存，这样才能够使用ansible的内置变量
